@@ -177,7 +177,7 @@ return {
 			}
 
 			local capabilities = vim.lsp.protocol.make_client_capabilities()
-			-- capabilities = vim.tbl_deep_extend( 'force', capabilities, require('cmp_nvim_lsp').default_capabilities())
+			capabilities = vim.tbl_deep_extend( 'force', capabilities, require('cmp_nvim_lsp').default_capabilities())
 
 			-- Enables the following language servers
 			-- Feel free to add/remove any LSPs that you want here, They will automatically be installed. 
@@ -211,6 +211,17 @@ return {
 			-- You can add other tools here that you want Mason to install
 			-- for you, so that they are available from within Neovim.
 			local ensure_installed = vim.tbl_keys(servers or {})
+			
+			--[[
+			local ensure_installed = vim.tbl_filter(
+				function(server)
+					return server ~= 'dartls'
+				end,
+				vim.tbl_keys( servers or {} )
+			)
+			--]]
+
+
 			vim.list_extend(ensure_installed, {
 				'stylua', -- used to format Lua Code.
 			})
@@ -220,6 +231,7 @@ return {
 			}
 
 			require('mason-lspconfig').setup {
+			
 				ensure_installed = {}, -- explicitly set to an empty table
 				automatic_installation = false, 
 				handlers = {
@@ -233,6 +245,18 @@ return {
 					end,
 				},
 			}
+
+			require('lspconfig').dartls.setup {
+				cmd = { "dart", "language-server", "--protocol=lsp" },
+				filetypes = { "dart" },
+				init_options = {
+					closingLabels = true, 
+					outline = true, 
+					flutterOutline = true,
+				},
+				capabilities = capabilities,
+			}
+
 		end, -- config section ends
 	}
 }
