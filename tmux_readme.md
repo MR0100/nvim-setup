@@ -43,4 +43,3 @@
 - `tmux kill-session -t [name]` : Kill a Specific tmux Session. 
 - `tmux kill-server`            : Kill all the existing tmux Sessions. 
     (Be Careful before using this command, it will kill all the sessions and those might be important. so, check the sessions before killing all)
-

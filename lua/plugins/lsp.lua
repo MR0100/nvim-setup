@@ -93,7 +93,7 @@ return {
 					---@param bufnr? integer some lsp support methods only in specific files
 					---@return boolean
 					local function client_supports_method(client, method, bufnr)
-						if vim.fn.has 'nvim-0.11' == 1 then 
+						if vim.fn.has 'nvim-0.11' == 1 then
 							return client.supports_method(method, bufnr)
 						else
 							return client.supports_method(method, { bufnr = bufnr })
@@ -108,7 +108,7 @@ return {
 					local client = vim.lsp.get_client_by_id(event.data.client_id)
 					if client and client_supports_method(client, vim.lsp.protocol.Methods.textDocument_documentHighlight, event.buf) then
 						local highlight_augroup = vim.api.nvim_create_augroup('kickstart-lsp-highlight', { clear = false })
-						vim.api.nvim_create_autocmd({ 'CursorHold', 'CursorHoldI' }, { 
+						vim.api.nvim_create_autocmd({ 'CursorHold', 'CursorHoldI' }, {
 							buffer = event.buf,
 							group = highlight_augroup,
 							callback = vim.lsp.buf.document_highlight,
@@ -116,7 +116,7 @@ return {
 
 						vim.api.nvim_create_autocmd({ 'CursorHold', 'CursorHoldI' }, {
 							buffer = event.buf,
-							group = highlight_augroup, 
+							group = highlight_augroup,
 							callback = vim.lsp.buf.clear_references,
 						})
 
@@ -135,10 +135,10 @@ return {
 					--
 					-- This may be unwanted, since they display some of your code
 					if client and client_supports_method(client, vim.lsp.protocol.Methods.textDocument_inlayHint, event.buf) then
-						map( 
-							'<leader>TIH', 
-							function() 
-								vim.lsp.inlay_hint.enable(not vim.lsp.inlay_hint.is_enabled { bufnr = event.buf }) 
+						map(
+							'<leader>TIH',
+							function()
+								vim.lsp.inlay_hint.enable(not vim.lsp.inlay_hint.is_enabled { bufnr = event.buf })
 							end,
 							'[<leader>]:operator [T]oggle [I]nline [H]ints'
 						)
@@ -149,7 +149,7 @@ return {
 			-- Diagnostinc config 
 			-- See :help vim.diagnostic.Opts
 			vim.diagnostic.config {
-				severity_sort = true, 
+				severity_sort = true,
 				float = { border = 'rounded', source ='if_many' },
 				underline = { severity = vim.diagnostic.severity.ERROR },
 				signs = {
@@ -161,8 +161,8 @@ return {
 					},
 				},
 				virtual_text = {
-					source = 'if_many', 
-					spacing = 2, 
+					source = 'if_many',
+					spacing = 2,
 					format = function(diagnostic)
 						local diagnostic_message = {
 							[vim.diagnostic.severity.ERROR] = diagnostic.message,
@@ -190,11 +190,10 @@ return {
 			local servers = {
 				ast_grep = {
 					filetypes = {
-						"dart",				"ts",				"js",					"rs",						"lua",				
+						"dart",				"ts",				"js",					"rs",						"lua",
 					},
 				},
 			}
-			
 
 			-- 
 			-- Ensure the servers and tools above are installed
@@ -211,7 +210,6 @@ return {
 			-- You can add other tools here that you want Mason to install
 			-- for you, so that they are available from within Neovim.
 			local ensure_installed = vim.tbl_keys(servers or {})
-			
 			--[[
 			local ensure_installed = vim.tbl_filter(
 				function(server)
@@ -231,9 +229,8 @@ return {
 			}
 
 			require('mason-lspconfig').setup {
-			
 				ensure_installed = {}, -- explicitly set to an empty table
-				automatic_installation = false, 
+				automatic_installation = false,
 				handlers = {
 					function(server_name)
 						local server = servers[server_name] or {}
@@ -246,15 +243,68 @@ return {
 				},
 			}
 
+			-- [ DART LSP CONFIGURATION ]
+			-- this is the dart lsp configuration. and with this we are making sure that for the dart files it starts the server.
 			require('lspconfig').dartls.setup {
 				cmd = { "dart", "language-server", "--protocol=lsp" },
 				filetypes = { "dart" },
 				init_options = {
-					closingLabels = true, 
-					outline = true, 
+					closingLabels = true,
+					outline = true,
 					flutterOutline = true,
 				},
 				capabilities = capabilities,
+			}
+
+			-- [ RUST LSP CONFIGURATION ]
+			-- Note that we are using `rust-analyzer` and `clippy`. so, for those two we need to check if it is configured correctly or not.
+			-- to check or install the `rust-analyzer`
+			-- to check if it is alreadt installed or not, use the command below. 
+			--
+			-- `rust-analyzer --version`
+			--
+			-- if not installed then there are multiple ways to install fresh.
+			-- install via: 
+			-- # For most systems:
+			--
+			-- ```
+			-- curl -L https://github.com/rust-lang/rust-analyzer/releases/latest/download/rust-analyzer-x86_64-unknown-linux-gnu.gz | gunzip -c - > ~/.local/bin/rust-analyzer
+			-- chmod +x ~/.local/bin/rust-analyzer
+			-- ```
+			--
+			-- install via `rustup` : 
+			-- `rustup component add rust-analyzer`
+			-- 
+			-- and link it using the command below : 
+			-- `ln -s "$(rustup which rust-analyzer)" ~/.local/bin/rust-analyzer`
+			--
+			--
+			-- we are also using the clippy. so, to check if the clippy is already installed or not we can use the command below. 
+			-- `rustup component list --installed | grep clippy`
+			--
+			-- and if not installed then use the command below to install the clippy.
+			-- `rustup component add clippy`
+			--
+			local lspconfig = require('lspconfig')
+
+			lspconfig.rust_analyzer.setup {
+				cmd = { "rust-analyzer" }, -- assumes rust-analyzer is in your PATH.
+				filetypes = { "rust" },
+				root_dir = lspconfig.util.root_pattern( "Cargo.toml", "rust-project.json", ".git" ),
+				capabilities = capabilities,
+				settings = {
+					["rust-analyzer"] = {
+						cargo = {
+							allFeatures = true,
+						},
+						checkOnSave = {
+							command = "clippy"
+						},
+						procMacro = {
+							enable = true,
+						},
+					},
+				},
 			}
 
 		end, -- config section ends
