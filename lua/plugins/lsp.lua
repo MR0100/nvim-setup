@@ -1,312 +1,498 @@
---[[ 
+--[[
 
 LSP
 ---
 
-The Language Server Protocol (LSP) is an open, JSON-RPC-based protocol for use between source code editors or integrated development environments (IDEs)
-and servers that provide "language intelligence tools": programming language-specific features like, 
-code completion, syntax highlighting and marking of warnings and errors, 
-as weel as refactoring routines. 
+The Language Server Protocol (LSP) is an open, JSON-RPC-based protocol used
+between source code editors and servers that provide "language intelligence":
+completion, diagnostics, go-to-definition, rename, code actions, and so on.
 
-The goal of the protocol is to allow programming language support to be implemented and distributed independently of any fiven editor or IDE. 
+The goal of the protocol is to let language support be implemented and
+distributed independently of any given editor.
 
-In the early 2020s, LSP quickly became a "norm" for language intelligence tools providers.
+
+HOW THIS FILE WORKS (and what changed)
+--------------------------------------
+Neovim 0.11 introduced `vim.lsp.config()` and `vim.lsp.enable()`. nvim-lspconfig
+no longer "sets up" servers itself. It now just ships ~400 default config files
+in its own `lsp/` directory, which Neovim discovers automatically because the
+plugin is on the runtimepath. Our only job here is to:
+
+  1. override the bits of those defaults we care about, via `vim.lsp.config()`
+  2. make sure the servers get enabled
+
+Two APIs this file used to rely on are gone or going:
+
+  * `require('lspconfig')[server].setup({...})` -- deprecated, and scheduled for
+    removal in nvim-lspconfig v3.0.0. It prints a loud deprecation traceback.
+
+  * mason-lspconfig's `handlers = { ... }` option -- REMOVED in mason-lspconfig
+    2.x. Its settings schema is now only `ensure_installed` and
+    `automatic_enable`. Anything passed as `handlers` is silently ignored, which
+    is why the previous version of this file applied *none* of its server
+    settings: lua_ls never got `callSnippet`, and no server ever received the
+    nvim-cmp capabilities.
+
+Servers owned by a dedicated plugin are excluded from automatic enabling and
+configured there instead:
+
+  * `rust_analyzer` -> lua/plugins/rust.lua    (rustaceanvim)
+  * `dartls`        -> lua/plugins/flutter.lua (flutter-tools.nvim)
+
+Enabling them in both places starts two copies of the server.
 
 --]]
 
+-- Neovim version guard. `vim.lsp.config` is 0.11+; there is no sensible
+-- fallback, so fail loudly rather than half-working.
+if vim.fn.has("nvim-0.11") == 0 then
+	vim.notify(
+		"This LSP config requires Neovim 0.11+ (uses vim.lsp.config). Please upgrade.",
+		vim.log.levels.ERROR
+	)
+	return {}
+end
 
--- LSP Configurations. 
-----------------------
+-- Some tooling can only be installed if its host toolchain is present. Mason
+-- builds the Go tools with `go install`, so without a Go toolchain those
+-- installs fail noisily on every startup. Gate them.
+local has_go = vim.fn.executable("go") == 1
 
 return {
 	{
-		-- Main LSP Configuration
-		'neovim/nvim-lspconfig',
+		-- Main LSP configuration.
+		"neovim/nvim-lspconfig",
+		event = { "BufReadPre", "BufNewFile" },
 		dependencies = {
-			-- Automatically install LSPs and related tools to stdpath for Neovim
-			-- Masson must be loaded before its dependents so we needd to set it up here. 
-			-- NOTE: `opts = {}` is the same as calling `require('mason').setup({})`
-			{ 'williamboman/mason.nvim', opts = {} },
-			'williamboman/mason-lspconfig.nvim',
-			'WhoIsSethDaniel/mason-tool-installer.nvim',
+			-- NOTE: the `williamboman/mason*` repos were transferred to the
+			-- `mason-org` organisation. The old URLs still redirect, but the new
+			-- ones are canonical.
+			{ "mason-org/mason.nvim", opts = {} },
+			"mason-org/mason-lspconfig.nvim",
+			"WhoIsSethDaniel/mason-tool-installer.nvim",
 
-			-- Userful status updates for LSP.
-			{ 'j-hui/fidget.nvim', opts = {} },
+			-- Useful status updates for LSP progress, bottom right.
+			{ "j-hui/fidget.nvim", opts = {} },
 
-			-- Allows extra capabilities provided by nvim-cmp
-			-- 'hrsh7th/cmp-nvim-lsp',
+			-- Extra completion capabilities provided by nvim-cmp.
+			"hrsh7th/cmp-nvim-lsp",
+
+			-- Ships the JSON/YAML schemas from schemastore.org, so jsonls and
+			-- yamlls can validate and complete package.json, tsconfig.json,
+			-- .eslintrc, GitHub Actions workflows, docker-compose.yml and so on.
+			-- Without it those files get syntax checking only.
+			"b0o/schemastore.nvim",
 		},
 		config = function()
-			vim.api.nvim_create_autocmd('LspAttach', {
-				group = vim.api.nvim_create_augroup('kickstart-lsp-attach', { clear = true }),
+			-- ================================================================
+			-- Buffer-local keymaps, set when a server attaches
+			-- ================================================================
+			vim.api.nvim_create_autocmd("LspAttach", {
+				group = vim.api.nvim_create_augroup("kickstart-lsp-attach", { clear = true }),
 				callback = function(event)
-					-- NOTE: Remember that Lua is a real programming language, and as such it is possible to define small helper and utility functions. 
-					-- so, you don't have to repeat yourself. 
-
-					-- In this case, we create a function that lets us more easily define mappings specific for LSP related Items. 
-					-- It sets the mode, buffer and description for us each time. 
+					-- Small helper so we don't repeat the mode/buffer/desc
+					-- boilerplate on every mapping.
 					local map = function(keys, func, desc, mode)
-						mode = mode or 'n'
-						vim.keymap.set(mode, keys, func, { buffer = event.buf, desc = "LSP: " .. desc })
+						mode = mode or "n"
+						vim.keymap.set(
+							mode,
+							keys,
+							func,
+							{ buffer = event.buf, desc = "LSP: " .. desc }
+						)
 					end
 
-					-- Jumo to the definition of the word under your cursor. 
-					-- This is where a variable was first declared, or where a function is defined, etc. 
-					-- To jump back, press <C-t>
-					map( '<leader>flgd', require('fzf-lua').lsp_definitions, '[l]sp [g]oto [d]efinition' )
+					-- Jump to the definition of the word under the cursor: where
+					-- a variable was first declared, or a function defined.
+					-- Jump back with <C-t>.
+					map(
+						"<leader>flgd",
+						require("fzf-lua").lsp_definitions,
+						"[l]sp [g]oto [d]efinition"
+					)
 
-					-- Find references for the word under your cursor. 
-					map( '<leader>flgr', require('fzf-lua').lsp_references, '[l]sp [g]oto [r]eferences' )
+					-- Find references for the word under the cursor.
+					map(
+						"<leader>flgr",
+						require("fzf-lua").lsp_references,
+						"[l]sp [g]oto [r]eferences"
+					)
 
-					-- Jump to the implementation of the word under your cursor. 
-					-- Useful when your language has ways of declaring types without an actual implementation. 
-					map( '<leader>flgI', require('fzf-lua').lsp_implementations, '[l]sp [g]oto [I]mplementation' )
+					-- Jump to the implementation. Useful in languages that can
+					-- declare a type without implementing it.
+					map(
+						"<leader>flgI",
+						require("fzf-lua").lsp_implementations,
+						"[l]sp [g]oto [I]mplementation"
+					)
 
-					-- Jump to the type of the word under your cursor. 
-					-- Useful when you're not sure what type a variable is and you want to see the definition of it's *type*, not where it was *defined*
-					map( '<leader>flT', require('fzf-lua').lsp_typedefs, '[<leader>]:operator [T]ype' )
+					-- Jump to the *type* of the word under the cursor, rather
+					-- than to where it was defined.
+					map(
+						"<leader>flT",
+						require("fzf-lua").lsp_typedefs,
+						"[<leader>]:operator [T]ype"
+					)
 
-					-- Fuzzy find all the symbols in your current document. 
-					-- Symbols are things like variables, functions, types, etc. 
-					-- map( '<leader>DS' require('fzf-lua').lsp_document_symbols, '[<leader>]:operator [D]ocument [S]ymbols' )
+					-- Fuzzy find symbols across the whole workspace.
+					map(
+						"<leader>fllws",
+						require("fzf-lua").lsp_live_workspace_symbols,
+						"[<leader>]:operator [L]ive [W]orkspace [S]ymbols"
+					)
 
-					-- Fuzzy find all the symbols in your current workspace. 
-					-- Similar to document symbols, except searchs over your entier project. 
-					map( '<leader>fllws', require('fzf-lua').lsp_live_workspace_symbols, '[<leader>]:operator [L]ive [W]orkspace [S]ymbols' )
+					-- Fuzzy find symbols in just this document.
+					map(
+						"<leader>flds",
+						require("fzf-lua").lsp_document_symbols,
+						"[l]sp [d]ocument [s]ymbols"
+					)
 
-					-- Rename the variable under your cursor.
-					-- Most language Servers Support renaming across files, etc. 
-					map( '<leader>flrn', vim.lsp.buf.rename, '[<leader>]:operator [C]ode re[N]ame' )
+					-- Rename the symbol under the cursor, across files.
+					map("<leader>flrn", vim.lsp.buf.rename, "[<leader>]:operator [C]ode re[N]ame")
 
-					-- Execute a code action, usually your cursor needs to be on top of an error
-					-- or a suggestions from your LSP for this to activate. 
-					map( '<leader>flca', vim.lsp.buf.code_action, '[<leader>]:operator [C]ode [A]ction', { 'n', 'x' } )
+					-- Run a code action. Usually the cursor needs to be on a
+					-- diagnostic or a server suggestion for this to offer
+					-- anything.
+					map(
+						"<leader>flca",
+						vim.lsp.buf.code_action,
+						"[<leader>]:operator [C]ode [A]ction",
+						{ "n", "x" }
+					)
 
-					-- WARN: This is not Goto Definition, this is Goto Declaration. 
-					-- for example, in C this would take you to the header. 
-					map( '<leader>flgD', vim.lsp.buf.declaration, '[l]sp [g]oto [D]eclaration' )
+					-- WARN: this is Goto *Declaration*, not Goto Definition. In
+					-- C, for example, this takes you to the header.
+					map("<leader>flgD", vim.lsp.buf.declaration, "[l]sp [g]oto [D]eclaration")
 
-
-					-- This function resolves a difference between neovim nightly (version 0.11) and stable (version 0.10)
-					---@param client vim.lsp.client
-					---@param method vim.lsp.protocol.Method
-					---@param bufnr? integer some lsp support methods only in specific files
+					-- Resolves a difference between Neovim 0.10 and 0.11+.
+					---@param client vim.lsp.Client
+					---@param method string
+					---@param bufnr? integer some servers support methods only in specific files
 					---@return boolean
 					local function client_supports_method(client, method, bufnr)
-						if vim.fn.has 'nvim-0.11' == 1 then
-							return client.supports_method(method, bufnr)
+						if vim.fn.has("nvim-0.11") == 1 then
+							-- NOTE: colon call. On 0.11+ this is a real method
+							-- and needs `self`.
+							return client:supports_method(method, bufnr)
 						else
 							return client.supports_method(method, { bufnr = bufnr })
 						end
 					end
 
-
-					-- The following two autocommands are used to hightlight references of the word under your cursor when your cursor resets there for a little while. 
-					-- See `:help CursorHold` for information about when this is executed. 
-					--
-					-- When you move your cursor, the highlights will be cleared (the second autocommand).
 					local client = vim.lsp.get_client_by_id(event.data.client_id)
-					if client and client_supports_method(client, vim.lsp.protocol.Methods.textDocument_documentHighlight, event.buf) then
-						local highlight_augroup = vim.api.nvim_create_augroup('kickstart-lsp-highlight', { clear = false })
-						vim.api.nvim_create_autocmd({ 'CursorHold', 'CursorHoldI' }, {
+
+					-- Highlight other references to the symbol under the cursor
+					-- when the cursor rests there for a moment, and clear the
+					-- highlights once it moves. See `:help CursorHold`.
+					if
+						client
+						and client_supports_method(
+							client,
+							vim.lsp.protocol.Methods.textDocument_documentHighlight,
+							event.buf
+						)
+					then
+						local highlight_augroup = vim.api.nvim_create_augroup(
+							"kickstart-lsp-highlight",
+							{ clear = false }
+						)
+
+						vim.api.nvim_create_autocmd({ "CursorHold", "CursorHoldI" }, {
 							buffer = event.buf,
 							group = highlight_augroup,
 							callback = vim.lsp.buf.document_highlight,
 						})
 
-						vim.api.nvim_create_autocmd({ 'CursorHold', 'CursorHoldI' }, {
+						vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
 							buffer = event.buf,
 							group = highlight_augroup,
 							callback = vim.lsp.buf.clear_references,
 						})
 
-						vim.api.nvim_create_autocmd( 'LspDetach', {
-							group = vim.api.nvim_create_augroup('kickstart-lsp-detach', { clear = true }),
+						vim.api.nvim_create_autocmd("LspDetach", {
+							group = vim.api.nvim_create_augroup(
+								"kickstart-lsp-detach",
+								{ clear = true }
+							),
 							callback = function(event2)
 								vim.lsp.buf.clear_references()
-								vim.api.nvim_clear_autocmds { group = 'kickstart-lsp-highlight', buffer = event2.buf }
+								vim.api.nvim_clear_autocmds({
+									group = "kickstart-lsp-highlight",
+									buffer = event2.buf,
+								})
 							end,
 						})
 					end
 
-
-					-- The following code create a keymap to toggle inlay hints in your code, 
-					-- if the language server you are using supports them.
-					--
-					-- This may be unwanted, since they display some of your code
-					if client and client_supports_method(client, vim.lsp.protocol.Methods.textDocument_inlayHint, event.buf) then
-						map(
-							'<leader>TIH',
-							function()
-								vim.lsp.inlay_hint.enable(not vim.lsp.inlay_hint.is_enabled { bufnr = event.buf })
-							end,
-							'[<leader>]:operator [T]oggle [I]nline [H]ints'
+					-- Toggle inlay hints, if the attached server provides them.
+					-- They render extra text inside your code, which is useful
+					-- but can be visually noisy, so it is opt-in per session.
+					if
+						client
+						and client_supports_method(
+							client,
+							vim.lsp.protocol.Methods.textDocument_inlayHint,
+							event.buf
 						)
+					then
+						map("<leader>TIH", function()
+							vim.lsp.inlay_hint.enable(
+								not vim.lsp.inlay_hint.is_enabled({ bufnr = event.buf })
+							)
+						end, "[<leader>]:operator [T]oggle [I]nline [H]ints")
 					end
 				end,
 			})
 
-			-- Diagnostinc config 
-			-- See :help vim.diagnostic.Opts
-			vim.diagnostic.config {
+			-- ================================================================
+			-- Diagnostics presentation
+			-- ================================================================
+			-- See `:help vim.diagnostic.Opts`
+			vim.diagnostic.config({
 				severity_sort = true,
-				float = { border = 'rounded', source ='if_many' },
+				float = { border = "rounded", source = "if_many" },
 				underline = { severity = vim.diagnostic.severity.ERROR },
+				-- NOTE: single-width Nerd Font glyphs. Emoji are double-width
+				-- and push the sign column out of alignment.
 				signs = {
 					text = {
-						[vim.diagnostic.severity.ERROR] = '‼️',
-						[vim.diagnostic.severity.WARN] = '⚠️',
-						[vim.diagnostic.severity.INFO] = 'ℹ️',
-						[vim.diagnostic.severity.HINT] = '💡',
+						[vim.diagnostic.severity.ERROR] = "󰅚 ",
+						[vim.diagnostic.severity.WARN] = "󰀪 ",
+						[vim.diagnostic.severity.INFO] = "󰋽 ",
+						[vim.diagnostic.severity.HINT] = "󰌶 ",
 					},
 				},
 				virtual_text = {
-					source = 'if_many',
+					source = "if_many",
 					spacing = 2,
 					format = function(diagnostic)
-						local diagnostic_message = {
-							[vim.diagnostic.severity.ERROR] = diagnostic.message,
-							[vim.diagnostic.severity.WARN] = diagnostic.message,
-							[vim.diagnostic.severity.INFO] = diagnostic.message,
-							[vim.diagnostic.severity.HINT] = diagnostic.message,
-						}
-
-						return diagnostic_message[diagnostic.severity]
+						return diagnostic.message
 					end,
 				},
-			}
-
-			local capabilities = vim.lsp.protocol.make_client_capabilities()
-			capabilities = vim.tbl_deep_extend( 'force', capabilities, require('cmp_nvim_lsp').default_capabilities())
-
-			-- Enables the following language servers
-			-- Feel free to add/remove any LSPs that you want here, They will automatically be installed. 
-			--
-			-- Add any additional override configuration in the following tables. Available keys are: 
-			-- -- cmd (table): override the default command used to start the server.
-			-- -- filetypes (table): override the default list of associated filetypes for the server. 
-			-- -- settings (table): override the default settings passed when initializing the server.
-			--		for example, to see the options for `lua_ls`, you could go to https://luals.github.io/wiki/settings/
-			local servers = {
-				ast_grep = {
-					filetypes = {
-						"dart",				"ts",				"js",					"rs",						"lua",
-					},
-				},
-			}
-
-			-- 
-			-- Ensure the servers and tools above are installed
-			--
-			-- To check the current status of installed tools and/or manually install
-			-- other tools, you can run
-			--    :Mason
-			--
-			-- You can press `g?` for help in this menu.
-			--
-			-- `mason` had to be setup earlier: to configure its options see the
-			-- `dependencies` table for `nvim-lspconfig` above.
-			--
-			-- You can add other tools here that you want Mason to install
-			-- for you, so that they are available from within Neovim.
-			local ensure_installed = vim.tbl_keys(servers or {})
-			--[[
-			local ensure_installed = vim.tbl_filter(
-				function(server)
-					return server ~= 'dartls'
-				end,
-				vim.tbl_keys( servers or {} )
-			)
-			--]]
-
-
-			vim.list_extend(ensure_installed, {
-				'stylua', -- used to format Lua Code.
 			})
 
-			require('mason-tool-installer').setup {
-				ensure_installed = ensure_installed
-			}
+			-- ================================================================
+			-- Capabilities shared by every server
+			-- ================================================================
+			-- `vim.lsp.config('*', ...)` is merged into every server config, so
+			-- the nvim-cmp capabilities only need declaring once. This is the
+			-- replacement for the old per-handler `tbl_deep_extend` dance.
+			vim.lsp.config("*", {
+				capabilities = require("cmp_nvim_lsp").default_capabilities(),
+			})
 
-			require('mason-lspconfig').setup {
-				ensure_installed = {}, -- explicitly set to an empty table
-				automatic_installation = false,
-				handlers = {
-					function(server_name)
-						local server = servers[server_name] or {}
-						-- This handles overriding only values explicitly passed
-						-- by the server configuration above. Useful when disabling certain features of an LSP. 
-						-- for example turning off formating for ts_ls.
-						server.capabilities = vim.tbl_deep_extend('force', {}, capabilities, server.capabilites or {})
-						require('lspconfig')[server_name].setup(server)
-					end,
-				},
-			}
-
-			-- [ DART LSP CONFIGURATION ]
-			-- this is the dart lsp configuration. and with this we are making sure that for the dart files it starts the server.
-			require('lspconfig').dartls.setup {
-				cmd = { "dart", "language-server", "--protocol=lsp" },
-				filetypes = { "dart" },
-				init_options = {
-					closingLabels = true,
-					outline = true,
-					flutterOutline = true,
-				},
-				capabilities = capabilities,
-			}
-
-			-- [ RUST LSP CONFIGURATION ]
-			-- Note that we are using `rust-analyzer` and `clippy`. so, for those two we need to check if it is configured correctly or not.
-			-- to check or install the `rust-analyzer`
-			-- to check if it is alreadt installed or not, use the command below. 
+			-- ================================================================
+			-- Per-server overrides
+			-- ================================================================
+			-- Each key is a server name as known to nvim-lspconfig (see its
+			-- `lsp/` directory for the full list). The table is merged *on top
+			-- of* lspconfig's shipped default for that server, so you only need
+			-- to state what differs.
 			--
-			-- `rust-analyzer --version`
-			--
-			-- if not installed then there are multiple ways to install fresh.
-			-- install via: 
-			-- # For most systems:
-			--
-			-- ```
-			-- curl -L https://github.com/rust-lang/rust-analyzer/releases/latest/download/rust-analyzer-x86_64-unknown-linux-gnu.gz | gunzip -c - > ~/.local/bin/rust-analyzer
-			-- chmod +x ~/.local/bin/rust-analyzer
-			-- ```
-			--
-			-- install via `rustup` : 
-			-- `rustup component add rust-analyzer`
-			-- 
-			-- and link it using the command below : 
-			-- `ln -s "$(rustup which rust-analyzer)" ~/.local/bin/rust-analyzer`
-			--
-			--
-			-- we are also using the clippy. so, to check if the clippy is already installed or not we can use the command below. 
-			-- `rustup component list --installed | grep clippy`
-			--
-			-- and if not installed then use the command below to install the clippy.
-			-- `rustup component add clippy`
-			--
-			local lspconfig = require('lspconfig')
-
-			lspconfig.rust_analyzer.setup {
-				cmd = { "rust-analyzer" }, -- assumes rust-analyzer is in your PATH.
-				filetypes = { "rust" },
-				root_dir = lspconfig.util.root_pattern( "Cargo.toml", "rust-project.json", ".git" ),
-				capabilities = capabilities,
-				settings = {
-					["rust-analyzer"] = {
-						cargo = {
-							allFeatures = true,
-						},
-						checkOnSave = {
-							command = "clippy"
-						},
-						procMacro = {
-							enable = true,
+			-- Available keys include:
+			--   cmd       (table) override the command used to start the server
+			--   filetypes (table) override which filetypes it attaches to
+			--   settings  (table) server-specific settings; for lua_ls see
+			--                     https://luals.github.io/wiki/settings/
+			local servers = {
+				-- [ LUA ] -----------------------------------------------------
+				-- Worth having purely for editing this config.
+				lua_ls = {
+					settings = {
+						Lua = {
+							completion = { callSnippet = "Replace" },
+							-- lazydev.nvim (lua/plugins/lazydev.lua) supplies the
+							-- Neovim runtime types on demand, so no
+							-- hand-maintained workspace.library is needed.
+							diagnostics = { disable = { "missing-fields" } },
 						},
 					},
 				},
+
+				-- [ GO ] ------------------------------------------------------
+				gopls = {
+					settings = {
+						gopls = {
+							-- Report shadowed variables, useless assignments,
+							-- unused params -- the analysers that catch real
+							-- bugs rather than style nits.
+							analyses = {
+								unusedparams = true,
+								shadow = true,
+								useany = true,
+								nilness = true,
+								unusedwrite = true,
+							},
+							staticcheck = true,
+							gofumpt = true,
+							-- Complete unimported packages and add the import
+							-- for you when you accept the completion.
+							completeUnimported = true,
+							usePlaceholders = true,
+							hints = {
+								assignVariableTypes = true,
+								compositeLiteralFields = true,
+								constantValues = true,
+								functionTypeParameters = true,
+								parameterNames = true,
+								rangeVariableTypes = true,
+							},
+						},
+					},
+				},
+
+				-- [ TYPESCRIPT / JAVASCRIPT ] ---------------------------------
+				-- vtsls wraps the official TypeScript language service and
+				-- exposes the extras the plain `ts_ls` config does not:
+				-- organise-imports, "go to source definition", better inlay
+				-- hints, and saner monorepo handling.
+				--
+				-- Works for Node, Bun and Deno-less TS projects alike, since it
+				-- is driven by tsconfig.json rather than by the runtime.
+				vtsls = {
+					settings = {
+						typescript = {
+							updateImportsOnFileMove = { enabled = "always" },
+							suggest = { completeFunctionCalls = true },
+							inlayHints = {
+								parameterNames = { enabled = "literals" },
+								parameterTypes = { enabled = true },
+								variableTypes = { enabled = true },
+								propertyDeclarationTypes = { enabled = true },
+								functionLikeReturnTypes = { enabled = true },
+								enumMemberValues = { enabled = true },
+							},
+						},
+						javascript = {
+							updateImportsOnFileMove = { enabled = "always" },
+							inlayHints = {
+								parameterNames = { enabled = "literals" },
+								variableTypes = { enabled = true },
+							},
+						},
+						vtsls = {
+							-- Surface the TS server's own errors instead of
+							-- swallowing them.
+							experimental = { completion = { enableServerSideFuzzyMatch = true } },
+						},
+					},
+				},
+
+				-- [ WEB / CONFIG FORMATS ] ------------------------------------
+				jsonls = {
+					settings = {
+						json = {
+							-- Schemas for package.json, tsconfig.json, .eslintrc,
+							-- and several hundred others.
+							schemas = require("schemastore").json.schemas(),
+							validate = { enable = true },
+						},
+					},
+				},
+				yamlls = {
+					settings = {
+						yaml = {
+							-- schemastore also covers YAML: GitHub Actions
+							-- workflows, docker-compose, k8s manifests.
+							schemaStore = {
+								-- Disable the built-in store; we supply it.
+								enable = false,
+								url = "",
+							},
+							schemas = require("schemastore").yaml.schemas(),
+							keyOrdering = false, -- don't demand alphabetical keys
+						},
+					},
+				},
+				html = {},
+				cssls = {},
+				bashls = {},
+				taplo = {}, -- TOML: Cargo.toml, pyproject.toml, etc.
+
+				-- [ AST-GREP ] ------------------------------------------------
+				-- NOTE: ast_grep only reports diagnostics for rules you write
+				-- yourself in an `sgconfig.yml` at the project root. Without
+				-- that file it attaches and does nothing. It is NOT a
+				-- replacement for a real language server.
+				ast_grep = {
+					filetypes = { "dart", "typescript", "javascript", "rust", "lua" },
+				},
 			}
 
-		end, -- config section ends
-	}
+			-- Register every override. This does not start anything; it only
+			-- records the config for when the server is enabled.
+			for name, config in pairs(servers) do
+				vim.lsp.config(name, config)
+			end
+
+			-- ================================================================
+			-- Installing the servers and tools
+			-- ================================================================
+			-- To inspect or manually manage installs, run `:Mason`. Press `g?`
+			-- inside that window for help.
+			--
+			-- mason.nvim itself was set up earlier -- see the `dependencies`
+			-- table on nvim-lspconfig above.
+
+			-- Servers Mason should keep installed.
+			local ensure_installed = vim.tbl_keys(servers)
+
+			-- Formatters, linters and debug adapters. These are not language
+			-- servers, so they are listed separately. They are consumed by
+			-- conform.nvim (lua/plugins/conform.lua) and nvim-dap
+			-- (lua/plugins/dap.lua).
+			--
+			-- NOTE: `rustfmt` and `dart format` are deliberately absent -- they
+			-- ship with the Rust and Dart toolchains, so Mason would only
+			-- duplicate them.
+			vim.list_extend(ensure_installed, {
+				"stylua", -- Lua formatter
+				"prettierd", -- js/ts/json/yaml/html/css/markdown formatter
+				"shfmt", -- shell formatter
+				"js-debug-adapter", -- Node/browser DAP adapter
+				"codelldb", -- native DAP adapter (Rust)
+			})
+
+			-- Mason builds these with `go install`, which needs a Go toolchain.
+			-- Without one the install fails on every startup, so only ask for
+			-- them when Go is actually present.
+			if has_go then
+				vim.list_extend(ensure_installed, {
+					"gofumpt", -- stricter gofmt
+					"goimports", -- manages the import block
+					"delve", -- Go debugger, used by nvim-dap-go
+				})
+			else
+				-- gopls is a pure-Go binary too; drop it rather than fail.
+				ensure_installed = vim.tbl_filter(function(tool)
+					return tool ~= "gopls"
+				end, ensure_installed)
+			end
+
+			require("mason-tool-installer").setup({
+				ensure_installed = ensure_installed,
+				-- Don't block startup on network calls.
+				run_on_start = true,
+				start_delay = 3000,
+			})
+
+			-- mason-lspconfig 2.x automatically enables every server Mason has
+			-- installed, via `vim.lsp.enable()`. We only need to tell it which
+			-- ones to leave alone.
+			require("mason-lspconfig").setup({
+				-- Installs are driven by mason-tool-installer above, so this
+				-- stays empty on purpose.
+				ensure_installed = {},
+				automatic_enable = {
+					exclude = {
+						-- Owned by rustaceanvim (lua/plugins/rust.lua).
+						"rust_analyzer",
+						-- Owned by flutter-tools.nvim (lua/plugins/flutter.lua).
+						"dartls",
+					},
+				},
+			})
+		end,
+	},
 }
