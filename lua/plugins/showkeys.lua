@@ -1,10 +1,21 @@
-return { 
+-- showkeys
+-- --------
+-- On-screen display of the keys you press. Useful for screencasts, pairing,
+-- and for catching what a plugin actually bound -- but noisy for everyday
+-- editing.
+--
+-- NOTE: this used to call ShowkeysToggle on startup, so the overlay was always
+-- on. It is now lazy-loaded behind a keymap instead.
+
+return {
 	"nvzone/showkeys",
-	lazy = false, -- Ensure it loads on startup. 
-	config = function()
-		-- Run the toggle command after the plugin is loaded. 
-		vim.schedule(function()
-			vim.cmd("ShowkeysToggle")
-		end)
-	end 
+	cmd = "ShowkeysToggle",
+	keys = {
+		{ "<leader>tk", "<cmd>ShowkeysToggle<CR>", desc = "[t]oggle [k]eys overlay" },
+	},
+	opts = {
+		timeout = 1,
+		maxkeys = 5,
+		position = "top-right",
+	},
 }

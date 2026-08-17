@@ -7,8 +7,10 @@ return {
 	opts = {},
 	keys = {
 		{ "<leader>fff", function() require('fzf-lua').files() end, desc = "Find Files in Project Directory."},
-		{ "<leader>ffg", function() require('fzf-lua').live_grep() end, desc = "Fing by Grepping in Project Directory.", },
-		{ "<leader>fdesk", function() require('fzf-lua').files({ cwd = "/Users/mitulvaghasiya/Desktop" }) end, desc = "Find Files in the Desktop." },
+		{ "<leader>ffg", function() require('fzf-lua').live_grep() end, desc = "Find by Grepping in Project Directory.", },
+		-- NOTE: was hardcoded to /Users/mitulvaghasiya/Desktop, which does not
+		-- exist on this machine. `~` expands to whatever the current user is.
+		{ "<leader>fdesk", function() require('fzf-lua').files({ cwd = vim.fn.expand("~/Desktop") }) end, desc = "Find Files in the Desktop." },
 		{ "<leader>ffp", function() require('fzf-lua').files({ cwd = "../" }) end, desc = "Find Files in the Parent Directory." },
 		{ "<leader>ffb", function() require('fzf-lua').builtin() end, desc = "f:decorator [f]ind [b]uiltins" },
 		{ "<leader>fcfg", function() require('fzf-lua').files({ cwd = vim.fn.stdpath("config") }) end, desc = "Find Files in the ~/.config/nvim Directory." },
