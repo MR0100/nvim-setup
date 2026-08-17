@@ -61,5 +61,9 @@ require("lazy").setup({
 require("config.keymaps")
 require("config.autocmds")
 
+-- cd into the project root of whatever file is open, so the fzf-lua pickers
+-- search the project rather than the directory nvim was started in.
+require("config.rootdir")
+
 
 
