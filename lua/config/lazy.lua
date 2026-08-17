@@ -37,11 +37,29 @@ require("lazy").setup({
   -- colorscheme that will be used when installing plugins.
   install = { colorscheme = { "tokyonight"} },
   -- automatically check for plugin updates
-  checker = { enabled = true },
+  -- notify = false keeps the check but stops the popup on every launch.
+  checker = { enabled = true, notify = false },
+  change_detection = { notify = false },
+  performance = {
+    rtp = {
+      -- Disable bundled vim plugins this config does not use. Shaves startup
+      -- time and removes a few surprising default behaviours.
+      disabled_plugins = {
+        "gzip",
+        "tarPlugin",
+        "tutor",
+        "zipPlugin",
+        "netrwPlugin", -- oil.nvim replaces netrw
+        -- NOTE: "tohtml" deliberately omitted. On 0.12 it moved to the opt
+        -- package `nvim.tohtml`, so listing it here does nothing.
+      },
+    },
+  },
 })
 
--- keymaps.
+-- keymaps and autocommands.
 require("config.keymaps")
+require("config.autocmds")
 
 
 

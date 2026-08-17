@@ -49,6 +49,49 @@ vim.opt.scrolloff = 10
 -- Disable commandline until it is needed. This gives us a cleaner look and an extra line ;)
 -- vim.opt.cmdheight = 0
 
--- Sets how neovim will display certain whitecharacters in the editor. 
+-- Sets how neovim will display certain whitecharacters in the editor.
 vim.opt.list = true
 vim.opt.listchars = { tab = "▸ ", trail = "·", nbsp = "␣"}
+
+-- Share the system clipboard, so y/p work across nvim and every other app.
+-- Scheduled because checking the clipboard provider at startup measurably
+-- slows nvim down. See `:help 'clipboard'`
+vim.schedule(function()
+	vim.opt.clipboard = "unnamedplus"
+end)
+
+-- Highlight matches as you search, and while typing the pattern.
+vim.opt.hlsearch = true
+vim.opt.incsearch = true
+
+-- Wrap long lines at word boundaries rather than mid-word.
+vim.opt.linebreak = true
+
+-- Ask to save instead of failing when quitting with unsaved changes.
+vim.opt.confirm = true
+
+-- Time to wait for a mapped sequence to complete, and how long which-key
+-- waits before showing its popup.
+vim.opt.timeoutlen = 400
+
+-- [ FOLDING ]
+-- Treesitter-driven folds: fold by actual code structure, not indentation.
+-- `za` toggles a fold, `zR` opens all, `zM` closes all.
+vim.opt.foldmethod = "expr"
+vim.opt.foldexpr = "v:lua.vim.treesitter.foldexpr()"
+vim.opt.foldtext = ""
+vim.opt.foldlevel = 99   -- start with everything unfolded
+vim.opt.foldnestmax = 4
+
+-- Rounded borders for all floating windows (hover, diagnostics, etc).
+-- Requires Neovim 0.11+; harmless to skip on older versions.
+if vim.fn.has("nvim-0.11") == 1 then
+	vim.opt.winborder = "rounded"
+end
+
+-- Disable language providers this config does not use. Each one that stays
+-- enabled costs a `:checkhealth` warning and a little startup time.
+vim.g.loaded_perl_provider = 0
+vim.g.loaded_ruby_provider = 0
+vim.g.loaded_node_provider = 0
+vim.g.loaded_python3_provider = 0
